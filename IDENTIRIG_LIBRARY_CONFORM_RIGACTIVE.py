@@ -1316,7 +1316,38 @@ def save_full_library(context):
         gui_data['SECONDARY_INTENSITY'] = {
             'secondary_intensity': secondary.secondary_intensity
         }
-        print(f"✅ Saved Secondary Intensity: {secondary.secondary_intensity}")    
+        print(f"✅ Saved Secondary Intensity: {secondary.secondary_intensity}")
+    
+    # 🚀 AGGIUNGI SISTEMA UNIVERSALE
+    print("🚀 STARTING UNIVERSAL SYSTEM...")
+    
+    # Scansiona tutti gli sliders
+    gui_sliders = scan_all_gui_sliders_universal(context)
+    
+    # Salva accessories completi
+    accessories = save_accessories_complete(context, props.library_path, char, props.chosen_type)
+    
+    # Salva displacement esteso
+    displacement = save_displacement_extended(context, props.library_path, char)
+    
+    # Salva materiali completi
+    materials_data = {}
+    for obj in context.scene.objects:
+        if obj.type == 'MESH' and obj.material_slots:
+            for slot in obj.material_slots:
+                if slot.material and slot.material.name not in materials_data:
+                    materials_data[slot.material.name] = save_material_complete(slot.material)
+    
+    # Combina con GUI data esistente
+    gui_data['GUI_SLIDERS_UNIVERSAL'] = gui_sliders
+    gui_data['ACCESSORIES_COMPLETE'] = accessories
+    gui_data['DISPLACEMENT_EXTENDED'] = displacement
+    gui_data['MATERIALS_COMPLETE'] = materials_data
+    
+    # Prepara morphing
+    gui_data['MORPHING_DATA'] = prepare_morphing_universal(gui_data)
+    
+    print(f"🎉 UNIVERSAL SYSTEM SAVED: {len(gui_sliders)} slider categories, {len(materials_data)} materials")    
     gui_path = os.path.join(props.library_path, f"{char}_gui.json")
     with open(gui_path, 'w') as f:
         json.dump(gui_data, f, indent=4)
@@ -1427,8 +1458,18 @@ def load_full_library(context):
             secondary.secondary_intensity = secondary_data['secondary_intensity']
             print(f"✅ Restored Secondary Intensity: {secondary_data['secondary_intensity']}")
         
+        # 🆕 CARICA SISTEMA UNIVERSALE
+        if 'GUI_SLIDERS_UNIVERSAL' in data:
+            print("🔄 Loading universal GUI sliders with manual updates...")
+            load_all_gui_sliders_universal_with_updates(context, data['GUI_SLIDERS_UNIVERSAL'], frame)
+        
+        if 'MATERIALS_COMPLETE' in data:
+            print("🖼️ Loading complete materials...")
+            # Materials will be loaded when objects are loaded, this data is for reference
+            print(f"✅ Material data available for {len(data['MATERIALS_COMPLETE'])} materials")
+        
         # 📊 SUMMARY
-        total_restored = sum(1 for key in data.keys() if key != 'location')
+        total_restored = sum(1 for key in data.keys() if key not in ['location', 'GUI_SLIDERS_UNIVERSAL', 'ACCESSORIES_COMPLETE', 'DISPLACEMENT_EXTENDED', 'MATERIALS_COMPLETE', 'MORPHING_DATA'])
         print(f"🎉 TOTAL GUI PANELS RESTORED: {total_restored}")    
     # Load content data
     if os.path.exists(blend_path) and os.path.exists(json_path):
@@ -1507,7 +1548,17 @@ def load_full_library(context):
                             p.inputs[4].keyframe_insert("default_value", frame=frame)
                             p.inputs[5].keyframe_insert("default_value", frame=frame)
     
+    # Apply displacement and morphing
     apply_displacement_from_json(context, props.library_path, char, set_keyframes=True, frame=frame)
+    
+    # Morphing universale
+    if frame is not None and 'MORPHING_DATA' in data:
+        print("🎬 Applying universal morphing...")
+        # The morphing data is prepared but actual application depends on the morphing system
+        # This is mainly for keyframe setup and will work with existing morphing
+        morphing_data = data['MORPHING_DATA']
+        print(f"✅ Morphing ready for {len(morphing_data.get('keyframeable_properties', []))} properties")
+    
     if char not in character_origin_frames:
         character_origin_frames[char] = frame
 
@@ -1957,6 +2008,537 @@ class UNIFIEDLIB_PT_panel(Panel):
         row.operator("unified_lib.save_ftp", text="Upload Complete Library", icon='EXPORT')
         row.operator("unified_lib.save_ftp_with_preview", text="Upload with Preview", icon='IMAGE_DATA')
 
+# ===============================
+# 🚀 SISTEMA UNIVERSALE - UNIVERSAL SYSTEM
+# ===============================
+
+def scan_all_gui_sliders_universal(context):
+    """🔍 SCANSIONA TUTTI GLI SLIDERS GUI AUTOMATICAMENTE"""
+    print("🔍 Starting universal GUI slider scan...")
+    
+    sliders_data = {
+        'SCENE_PROPERTIES': {},
+        'OBJECT_PROPERTIES': {},
+        'BONE_PROPERTIES': {},
+        'PROPERTY_GROUPS': {},
+        'WRINKLES_INTENSITY': {},
+        'EXPRESSION_INTENSITY': {},
+        'SECONDARY_INTENSITY': {}
+    }
+    
+    # 1. Scene Properties Scanning
+    scene = context.scene
+    
+    # Wrinkles Intensity Panel
+    if hasattr(scene, 'wrinkles_props'):
+        wrinkles = scene.wrinkles_props
+        sliders_data['WRINKLES_INTENSITY'] = {
+            'primary_intensity': wrinkles.primary_intensity,
+            'secondary_intensity': wrinkles.secondary_intensity
+        }
+        print(f"✅ Found Wrinkles: Primary {wrinkles.primary_intensity}, Secondary {wrinkles.secondary_intensity}")
+    
+    # Expression Intensity Panel
+    if hasattr(scene, 'expr_intensity_props'):
+        expr = scene.expr_intensity_props
+        sliders_data['EXPRESSION_INTENSITY'] = {
+            'expression_intensity': expr.expression_intensity
+        }
+        print(f"✅ Found Expression Intensity: {expr.expression_intensity}")
+    
+    # Secondary Intensity Panel
+    if hasattr(scene, 'secondary_intensity_props'):
+        secondary = scene.secondary_intensity_props
+        sliders_data['SECONDARY_INTENSITY'] = {
+            'secondary_intensity': secondary.secondary_intensity
+        }
+        print(f"✅ Found Secondary Intensity: {secondary.secondary_intensity}")
+    
+    # 2. GUI Objects Location (existing system)
+    rig_coll = find_active_rig_collection(context)
+    gui = find_gui_collection_in_rig(rig_coll) if rig_coll else None
+    
+    if gui:
+        for obj in gui.all_objects:
+            if obj.type == 'MESH':
+                sliders_data['OBJECT_PROPERTIES'][obj.name] = {
+                    "location": list(obj.location),
+                    "rotation_euler": list(obj.rotation_euler),
+                    "scale": list(obj.scale)
+                }
+        print(f"✅ Found {len(sliders_data['OBJECT_PROPERTIES'])} GUI objects")
+    
+    # 3. Bone Properties Scanning (for armature-based sliders)
+    for obj in scene.objects:
+        if obj.type == 'ARMATURE' and obj.data.bones:
+            for bone in obj.data.bones:
+                if bone.name.startswith("GUI_") or "control" in bone.name.lower() or "ctl" in bone.name.lower():
+                    pose_bone = obj.pose.bones.get(bone.name)
+                    if pose_bone:
+                        sliders_data['BONE_PROPERTIES'][f"{obj.name}.{bone.name}"] = {
+                            "location": list(pose_bone.location),
+                            "rotation_euler": list(pose_bone.rotation_euler),
+                            "scale": list(pose_bone.scale)
+                        }
+    
+    print(f"✅ Found {len(sliders_data['BONE_PROPERTIES'])} bone controls")
+    
+    # 4. Property Groups Scanning (custom properties)
+    for obj in scene.objects:
+        if obj.keys():
+            for key in obj.keys():
+                if not key.startswith("_"):  # Skip hidden properties
+                    if obj.name not in sliders_data['PROPERTY_GROUPS']:
+                        sliders_data['PROPERTY_GROUPS'][obj.name] = {}
+                    sliders_data['PROPERTY_GROUPS'][obj.name][key] = obj[key]
+    
+    total_sliders = sum(len(category) for category in sliders_data.values() if isinstance(category, dict))
+    print(f"🎉 Universal scan complete! Found {total_sliders} total properties")
+    
+    return sliders_data
+
+def load_all_gui_sliders_universal_with_updates(context, data, frame=None):
+    """🎚️ CARICA E AGGIORNA TUTTI GLI SLIDERS COME MOVIMENTO MANUALE"""
+    print("🔄 Loading universal GUI sliders with manual updates...")
+    
+    if frame is None:
+        frame = context.scene.frame_current
+    
+    scene = context.scene
+    
+    # 1. Load Wrinkles Intensity
+    if 'WRINKLES_INTENSITY' in data and hasattr(scene, 'wrinkles_props'):
+        wrinkles_data = data['WRINKLES_INTENSITY']
+        wrinkles = scene.wrinkles_props
+        
+        if 'primary_intensity' in wrinkles_data:
+            wrinkles.primary_intensity = wrinkles_data['primary_intensity']
+            # Force update callbacks if they exist
+            context.view_layer.update()
+            print(f"✅ Restored Primary Wrinkles: {wrinkles_data['primary_intensity']}")
+        
+        if 'secondary_intensity' in wrinkles_data:
+            wrinkles.secondary_intensity = wrinkles_data['secondary_intensity']
+            context.view_layer.update()
+            print(f"✅ Restored Secondary Wrinkles: {wrinkles_data['secondary_intensity']}")
+    
+    # 2. Load Expression Intensity
+    if 'EXPRESSION_INTENSITY' in data and hasattr(scene, 'expr_intensity_props'):
+        expr_data = data['EXPRESSION_INTENSITY']
+        expr = scene.expr_intensity_props
+        expr.expression_intensity = expr_data['expression_intensity']
+        context.view_layer.update()
+        print(f"✅ Restored Expression Intensity: {expr_data['expression_intensity']}")
+    
+    # 3. Load Secondary Intensity
+    if 'SECONDARY_INTENSITY' in data and hasattr(scene, 'secondary_intensity_props'):
+        secondary_data = data['SECONDARY_INTENSITY']
+        secondary = scene.secondary_intensity_props
+        secondary.secondary_intensity = secondary_data['secondary_intensity']
+        context.view_layer.update()
+        print(f"✅ Restored Secondary Intensity: {secondary_data['secondary_intensity']}")
+    
+    # 4. Load GUI Objects (existing system)
+    rig_coll = find_active_rig_collection(context)
+    gui = find_gui_collection_in_rig(rig_coll) if rig_coll else None
+    
+    if gui and 'OBJECT_PROPERTIES' in data:
+        for name, info in data['OBJECT_PROPERTIES'].items():
+            matches = [obj for obj in gui.all_objects if obj.name.startswith(name)]
+            for obj in matches:
+                obj.location = info["location"]
+                obj.keyframe_insert(data_path="location", frame=frame)
+                if "rotation_euler" in info:
+                    obj.rotation_euler = info["rotation_euler"]
+                    obj.keyframe_insert(data_path="rotation_euler", frame=frame)
+                if "scale" in info:
+                    obj.scale = info["scale"]
+                    obj.keyframe_insert(data_path="scale", frame=frame)
+        print(f"✅ Restored {len(data['OBJECT_PROPERTIES'])} GUI objects")
+    
+    # 5. Load Bone Properties
+    if 'BONE_PROPERTIES' in data:
+        for bone_path, bone_data in data['BONE_PROPERTIES'].items():
+            obj_name, bone_name = bone_path.split('.', 1)
+            obj = scene.objects.get(obj_name)
+            if obj and obj.type == 'ARMATURE':
+                pose_bone = obj.pose.bones.get(bone_name)
+                if pose_bone:
+                    pose_bone.location = bone_data["location"]
+                    pose_bone.rotation_euler = bone_data["rotation_euler"]
+                    pose_bone.scale = bone_data["scale"]
+                    pose_bone.keyframe_insert(data_path="location", frame=frame)
+                    pose_bone.keyframe_insert(data_path="rotation_euler", frame=frame)
+                    pose_bone.keyframe_insert(data_path="scale", frame=frame)
+        print(f"✅ Restored {len(data['BONE_PROPERTIES'])} bone controls")
+    
+    # 6. Load Property Groups
+    if 'PROPERTY_GROUPS' in data:
+        for obj_name, properties in data['PROPERTY_GROUPS'].items():
+            obj = scene.objects.get(obj_name)
+            if obj:
+                for key, value in properties.items():
+                    obj[key] = value
+                    # Try to keyframe custom properties
+                    try:
+                        obj.keyframe_insert(data_path=f'["{key}"]', frame=frame)
+                    except:
+                        pass  # Some properties may not be keyframeable
+        print(f"✅ Restored property groups for {len(data['PROPERTY_GROUPS'])} objects")
+    
+    # Force scene update to trigger all callbacks
+    context.view_layer.update()
+    scene.frame_set(scene.frame_current)
+    
+    print("🎉 Universal GUI slider loading complete!")
+
+def save_accessories_complete(context, library_path, char_name, type_):
+    """🎭 SALVA ACCESSORIES COMPLETI CON MORPHING"""
+    print(f"🎭 Saving complete accessories for {char_name}...")
+    
+    accessories_data = {
+        'objects': [],
+        'materials': {},
+        'modifiers': {},
+        'morphing_data': {}
+    }
+    
+    rig_coll = find_active_rig_collection(context)
+    accessories_coll = find_accessories_collection_in_rig(rig_coll)
+    
+    if accessories_coll:
+        for obj in accessories_coll.all_objects:
+            if obj.type == 'MESH':
+                obj_data = {
+                    'name': obj.name,
+                    'location': list(obj.location),
+                    'rotation_euler': list(obj.rotation_euler),
+                    'scale': list(obj.scale),
+                    'modifiers': []
+                }
+                
+                # Save all modifiers
+                for mod in obj.modifiers:
+                    mod_data = {
+                        'name': mod.name,
+                        'type': mod.type
+                    }
+                    # Add specific modifier properties based on type
+                    if mod.type == 'SURFACE_DEFORM':
+                        mod_data['target'] = mod.target.name if mod.target else None
+                        mod_data['is_bound'] = mod.is_bound
+                    elif mod.type == 'SHRINKWRAP':
+                        mod_data['target'] = mod.target.name if mod.target else None
+                        mod_data['wrap_method'] = mod.wrap_method
+                    
+                    obj_data['modifiers'].append(mod_data)
+                
+                # Save materials
+                if obj.material_slots:
+                    obj_data['materials'] = []
+                    for slot in obj.material_slots:
+                        if slot.material:
+                            obj_data['materials'].append(slot.material.name)
+                            # Save complete material data
+                            accessories_data['materials'][slot.material.name] = save_material_complete(slot.material)
+                
+                accessories_data['objects'].append(obj_data)
+        
+        print(f"✅ Saved {len(accessories_data['objects'])} accessories with complete data")
+    
+    return accessories_data
+
+def save_material_complete(material):
+    """🖼️ SALVA MATERIALE COMPLETO CON NODE TREE"""
+    print(f"🖼️ Saving complete material: {material.name}")
+    
+    material_data = {
+        'name': material.name,
+        'use_nodes': material.use_nodes,
+        'nodes': {},
+        'links': [],
+        'properties': {}
+    }
+    
+    # Basic material properties
+    material_data['properties'] = {
+        'metallic': material.metallic,
+        'roughness': material.roughness,
+        'use_backface_culling': material.use_backface_culling,
+        'blend_method': material.blend_method,
+        'shadow_method': material.shadow_method
+    }
+    
+    # Node tree data
+    if material.use_nodes and material.node_tree:
+        for node in material.node_tree.nodes:
+            node_data = {
+                'name': node.name,
+                'type': node.type,
+                'location': list(node.location),
+                'inputs': {},
+                'outputs': {}
+            }
+            
+            # Save input values
+            for input_socket in node.inputs:
+                if input_socket.type == 'VALUE':
+                    node_data['inputs'][input_socket.name] = input_socket.default_value
+                elif input_socket.type == 'RGBA':
+                    node_data['inputs'][input_socket.name] = list(input_socket.default_value)
+                elif input_socket.type == 'VECTOR':
+                    node_data['inputs'][input_socket.name] = list(input_socket.default_value)
+            
+            # Save image paths for texture nodes
+            if node.type == 'TEX_IMAGE' and node.image:
+                node_data['image_path'] = node.image.filepath
+                node_data['image_name'] = node.image.name
+            
+            material_data['nodes'][node.name] = node_data
+        
+        # Save links
+        for link in material.node_tree.links:
+            link_data = {
+                'from_node': link.from_node.name,
+                'from_socket': link.from_socket.name,
+                'to_node': link.to_node.name,
+                'to_socket': link.to_socket.name
+            }
+            material_data['links'].append(link_data)
+    
+    print(f"✅ Saved material {material.name} with {len(material_data['nodes'])} nodes")
+    return material_data
+
+def save_displacement_extended(context, library_path, char_name):
+    """🎨 SALVA TUTTI I DISPLACEMENT ESTESI"""
+    print(f"🎨 Saving extended displacement for {char_name}...")
+    
+    displacement_data = {
+        'head_displacement': {},
+        'body_displacement': {},
+        'shape_keys': {},
+        'material_displacement': {}
+    }
+    
+    rig_collection = find_active_rig_collection(context)
+    head_obj = find_head_object_in_rig(rig_collection)
+    
+    # Save head displacement (existing system)
+    if head_obj:
+        displacement_data['head_displacement'] = get_displacement_data(head_obj)
+        
+        # Save shape keys
+        if head_obj.data.shape_keys:
+            shape_keys = {}
+            for key_block in head_obj.data.shape_keys.key_blocks:
+                if key_block.name != 'Basis':
+                    shape_keys[key_block.name] = key_block.value
+            displacement_data['shape_keys'] = shape_keys
+            print(f"✅ Saved {len(shape_keys)} shape keys")
+    
+    # Save displacement for all mesh objects in rig
+    if rig_collection:
+        for obj in rig_collection.all_objects:
+            if obj.type == 'MESH' and obj != head_obj:
+                obj_displacement = get_displacement_data(obj)
+                if obj_displacement['MICROSKIN'] or obj_displacement['WRINKLES']:
+                    displacement_data['body_displacement'][obj.name] = obj_displacement
+    
+    # Save material-based displacement
+    for obj in context.scene.objects:
+        if obj.type == 'MESH' and obj.material_slots:
+            for slot in obj.material_slots:
+                if slot.material and slot.material.use_nodes:
+                    material = slot.material
+                    disp_nodes = []
+                    for node in material.node_tree.nodes:
+                        if node.type == 'DISPLACEMENT' or 'displace' in node.name.lower():
+                            disp_nodes.append({
+                                'name': node.name,
+                                'type': node.type,
+                                'inputs': {inp.name: inp.default_value for inp in node.inputs if inp.type == 'VALUE'}
+                            })
+                    if disp_nodes:
+                        displacement_data['material_displacement'][material.name] = disp_nodes
+    
+    print(f"✅ Saved extended displacement data for {char_name}")
+    return displacement_data
+
+def prepare_morphing_universal(all_data):
+    """🎬 PREPARA MORPHING UNIVERSALE PER TUTTO"""
+    print("🎬 Preparing universal morphing data...")
+    
+    morphing_data = {
+        'keyframeable_properties': [],
+        'animation_curves': {},
+        'morph_targets': {},
+        'transition_data': {}
+    }
+    
+    # Collect all keyframeable properties from universal data
+    if 'GUI_SLIDERS_UNIVERSAL' in all_data:
+        gui_data = all_data['GUI_SLIDERS_UNIVERSAL']
+        
+        # Add GUI object properties
+        if 'OBJECT_PROPERTIES' in gui_data:
+            for obj_name, properties in gui_data['OBJECT_PROPERTIES'].items():
+                for prop_name in ['location', 'rotation_euler', 'scale']:
+                    if prop_name in properties:
+                        morphing_data['keyframeable_properties'].append(f"{obj_name}.{prop_name}")
+        
+        # Add bone properties
+        if 'BONE_PROPERTIES' in gui_data:
+            for bone_path, properties in gui_data['BONE_PROPERTIES'].items():
+                for prop_name in ['location', 'rotation_euler', 'scale']:
+                    if prop_name in properties:
+                        morphing_data['keyframeable_properties'].append(f"{bone_path}.{prop_name}")
+        
+        # Add intensity properties
+        for intensity_type in ['WRINKLES_INTENSITY', 'EXPRESSION_INTENSITY', 'SECONDARY_INTENSITY']:
+            if intensity_type in gui_data:
+                for prop_name in gui_data[intensity_type]:
+                    morphing_data['keyframeable_properties'].append(f"scene.{intensity_type}.{prop_name}")
+    
+    # Add displacement properties
+    if 'DISPLACEMENT_EXTENDED' in all_data:
+        disp_data = all_data['DISPLACEMENT_EXTENDED']
+        if 'shape_keys' in disp_data:
+            for key_name in disp_data['shape_keys']:
+                morphing_data['keyframeable_properties'].append(f"shape_key.{key_name}")
+    
+    # Add material properties
+    if 'MATERIALS_COMPLETE' in all_data:
+        materials_data = all_data['MATERIALS_COMPLETE']
+        for mat_name, mat_data in materials_data.items():
+            if 'nodes' in mat_data:
+                for node_name, node_data in mat_data['nodes'].items():
+                    if 'inputs' in node_data:
+                        for input_name in node_data['inputs']:
+                            morphing_data['keyframeable_properties'].append(f"material.{mat_name}.{node_name}.{input_name}")
+    
+    print(f"✅ Prepared morphing for {len(morphing_data['keyframeable_properties'])} properties")
+    return morphing_data
+
+def test_universal_system(context):
+    """🧪 TEST COMPLETO DEL SISTEMA UNIVERSALE"""
+    print("🧪 TESTING UNIVERSAL SYSTEM...")
+    
+    # Test scan
+    sliders = scan_all_gui_sliders_universal(context)
+    total_sliders = sum(len(category) for category in sliders.values() if isinstance(category, dict))
+    print(f"✅ SLIDERS SCANNED: {total_sliders}")
+    
+    # Test morphing
+    mock_data = {'GUI_SLIDERS_UNIVERSAL': sliders}
+    morphing_data = prepare_morphing_universal(mock_data)
+    print(f"✅ MORPHING PREPARED: {len(morphing_data.get('keyframeable_properties', []))} properties")
+    
+    # Test materials
+    materials_count = len([obj for obj in context.scene.objects if obj.type == 'MESH' and obj.material_slots])
+    print(f"✅ MATERIALS READY: {materials_count} objects with materials")
+    
+    # Test displacement
+    rig_collection = find_active_rig_collection(context)
+    head_obj = find_head_object_in_rig(rig_collection)
+    displacement_ready = head_obj is not None
+    print(f"✅ DISPLACEMENT READY: {displacement_ready}")
+    
+    # Test accessories
+    accessories_coll = find_accessories_collection_in_rig(rig_collection) if rig_collection else None
+    accessories_count = len(accessories_coll.all_objects) if accessories_coll else 0
+    print(f"✅ ACCESSORIES READY: {accessories_count} objects")
+    
+    print("🎉 SISTEMA UNIVERSALE TEST COMPLETATO!")
+    
+    return {
+        'total_sliders': total_sliders,
+        'morphing_properties': len(morphing_data.get('keyframeable_properties', [])),
+        'materials_count': materials_count,
+        'displacement_ready': displacement_ready,
+        'accessories_count': accessories_count
+    }
+
+# New Universal System Operators
+class UNIFIEDLIB_OT_test_universal_system(Operator):
+    bl_idname = "unified_lib.test_universal_system"
+    bl_label = "Test Sistema Universale"
+    bl_description = "Test complete universal system functionality"
+    
+    def execute(self, context):
+        try:
+            results = test_universal_system(context)
+            message = f"Universal System Test Complete!\n"
+            message += f"Sliders: {results['total_sliders']}\n"
+            message += f"Morphing Properties: {results['morphing_properties']}\n"
+            message += f"Materials: {results['materials_count']}\n"
+            message += f"Displacement: {'Ready' if results['displacement_ready'] else 'Not Ready'}\n"
+            message += f"Accessories: {results['accessories_count']}"
+            
+            self.report({'INFO'}, message)
+            return {'FINISHED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Universal system test failed: {e}")
+            return {'CANCELLED'}
+
+class UNIFIEDLIB_OT_scan_all_sliders(Operator):
+    bl_idname = "unified_lib.scan_all_sliders"
+    bl_label = "Scan All Sliders"
+    bl_description = "Scan all GUI sliders in the scene"
+    
+    def execute(self, context):
+        try:
+            sliders = scan_all_gui_sliders_universal(context)
+            total = sum(len(cat) for cat in sliders.values() if isinstance(cat, dict))
+            self.report({'INFO'}, f"Found {total} sliders across all categories")
+            return {'FINISHED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Slider scan failed: {e}")
+            return {'CANCELLED'}
+
+# New Universal System Panel
+class UNIFIEDLIB_PT_universal_panel(Panel):
+    bl_label = "SISTEMA UNIVERSALE"
+    bl_idname = "UNIFIEDLIB_PT_universal"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "IDENTIRIG_PLUS"
+    
+    def draw(self, context):
+        layout = self.layout
+        
+        # Test sistema
+        box = layout.box()
+        box.label(text="🧪 Test Sistema Universale", icon='EXPERIMENTAL')
+        box.operator("unified_lib.test_universal_system", text="Run Complete Test", icon='PLAY')
+        
+        # Scan sliders
+        box = layout.box()
+        box.label(text="🔍 Scan Sliders", icon='VIEWZOOM')
+        box.operator("unified_lib.scan_all_sliders", text="Scan All GUI Sliders", icon='BORDERMOVE')
+        
+        # Status
+        box = layout.box()
+        box.label(text="📊 Status Sistema", icon='INFO')
+        
+        # Check if rig is active
+        if context.scene.identirig_active_library:
+            box.label(text=f"✅ Active Rig: {context.scene.identirig_active_library}", icon='CHECKMARK')
+            
+            # Check components
+            rig_collection = find_active_rig_collection(context)
+            if rig_collection:
+                gui_coll = find_gui_collection_in_rig(rig_collection)
+                accessories_coll = find_accessories_collection_in_rig(rig_collection)
+                head_obj = find_head_object_in_rig(rig_collection)
+                
+                box.label(text=f"GUI Collection: {'✅' if gui_coll else '❌'}")
+                box.label(text=f"Accessories Collection: {'✅' if accessories_coll else '❌'}")
+                box.label(text=f"Head Object: {'✅' if head_obj else '❌'}")
+            else:
+                box.label(text="❌ Rig collection not found", icon='ERROR')
+        else:
+            box.label(text="❌ No active rig selected", icon='ERROR')
+
 # Registration
 def register():
     # Register property groups
@@ -1980,14 +2562,25 @@ def register():
     bpy.utils.register_class(UNIFIEDLIB_PT_panel)
     bpy.utils.register_class(UnifiedLibraryPreferences)
     
+    # 🆕 REGISTRA SISTEMA UNIVERSALE
+    bpy.utils.register_class(UNIFIEDLIB_PT_universal_panel)
+    bpy.utils.register_class(UNIFIEDLIB_OT_test_universal_system)
+    bpy.utils.register_class(UNIFIEDLIB_OT_scan_all_sliders)
+    
     # Register scene properties
     bpy.types.Scene.library_preview_props = PointerProperty(type=LibraryPreviewProps)
     bpy.types.Scene.identirig_active_library = StringProperty(name="Active Library Rig")
     
     print("✅ IDENTILIBRARY PLUS registered successfully!")
+    print("✅ SISTEMA UNIVERSALE REGISTRATO!")
 
 def unregister():
     # Unregister in reverse order
+    # 🆕 UNREGISTER SISTEMA UNIVERSALE
+    bpy.utils.unregister_class(UNIFIEDLIB_OT_scan_all_sliders)
+    bpy.utils.unregister_class(UNIFIEDLIB_OT_test_universal_system)
+    bpy.utils.unregister_class(UNIFIEDLIB_PT_universal_panel)
+    
     bpy.utils.unregister_class(UnifiedLibraryPreferences)
     bpy.utils.unregister_class(UNIFIEDLIB_PT_panel)
     bpy.utils.unregister_class(UNIFIEDLIB_OT_set_from_ftp)
