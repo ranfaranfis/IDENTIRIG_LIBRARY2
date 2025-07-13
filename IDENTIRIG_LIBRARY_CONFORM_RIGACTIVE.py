@@ -562,6 +562,218 @@ def find_accessories_collection_in_rig(rig_collection):
     
     return accessories_coll
 
+def serialize_material(material):
+    """Serialize material data to JSON-compatible format"""
+    if not material:
+        return None
+    
+    material_data = {
+        'name': material.name,
+        'use_nodes': material.use_nodes,
+        'diffuse_color': list(material.diffuse_color) if hasattr(material, 'diffuse_color') else [0.8, 0.8, 0.8, 1.0],
+        'metallic': getattr(material, 'metallic', 0.0),
+        'roughness': getattr(material, 'roughness', 0.5),
+        'specular': getattr(material, 'specular', 0.5),
+        'use_backface_culling': getattr(material, 'use_backface_culling', False),
+        'blend_method': getattr(material, 'blend_method', 'OPAQUE'),
+        'shadow_method': getattr(material, 'shadow_method', 'OPAQUE'),  # Safe fallback
+        'alpha_threshold': getattr(material, 'alpha_threshold', 0.5),
+        'use_screen_refraction': getattr(material, 'use_screen_refraction', False),
+        'pass_index': getattr(material, 'pass_index', 0)
+    }
+    
+    # Store node tree structure if using nodes
+    if material.use_nodes and material.node_tree:
+        material_data['nodes'] = serialize_material_nodes(material.node_tree)
+    
+    return material_data
+
+def serialize_material_nodes(node_tree):
+    """Serialize material node tree to JSON-compatible format"""
+    if not node_tree:
+        return None
+    
+    nodes_data = []
+    for node in node_tree.nodes:
+        node_data = {
+            'name': node.name,
+            'type': node.type,
+            'location': list(node.location),
+            'label': node.label,
+            'hide': node.hide,
+            'mute': node.mute,
+            'inputs': []
+        }
+        
+        # Serialize node inputs with safe fallbacks
+        for input_socket in node.inputs:
+            input_data = {
+                'name': input_socket.name,
+                'type': input_socket.type
+            }
+            
+            # Get default value safely
+            try:
+                if hasattr(input_socket, 'default_value'):
+                    default_value = input_socket.default_value
+                    if hasattr(default_value, '__len__') and not isinstance(default_value, str):
+                        input_data['default_value'] = list(default_value)
+                    else:
+                        input_data['default_value'] = default_value
+            except:
+                input_data['default_value'] = None
+                
+            node_data['inputs'].append(input_data)
+        
+        nodes_data.append(node_data)
+    
+    return nodes_data
+
+def deserialize_material(material_data):
+    """Recreate material from serialized data"""
+    if not material_data:
+        return None
+    
+    material_name = material_data['name']
+    
+    # Check if material already exists
+    if material_name in bpy.data.materials:
+        return bpy.data.materials[material_name]
+    
+    # Create new material
+    material = bpy.data.materials.new(name=material_name)
+    material.use_nodes = material_data.get('use_nodes', True)
+    
+    # Restore basic properties with safe fallbacks
+    if 'diffuse_color' in material_data:
+        material.diffuse_color = material_data['diffuse_color']
+    if 'metallic' in material_data:
+        material.metallic = material_data['metallic']
+    if 'roughness' in material_data:
+        material.roughness = material_data['roughness']
+    if 'specular' in material_data:
+        material.specular = material_data['specular']
+    if 'use_backface_culling' in material_data:
+        material.use_backface_culling = material_data['use_backface_culling']
+    if 'blend_method' in material_data:
+        material.blend_method = material_data['blend_method']
+    if 'shadow_method' in material_data:
+        # Safe fallback for shadow_method
+        try:
+            material.shadow_method = material_data['shadow_method']
+        except:
+            material.shadow_method = 'OPAQUE'
+    if 'alpha_threshold' in material_data:
+        material.alpha_threshold = material_data['alpha_threshold']
+    if 'use_screen_refraction' in material_data:
+        material.use_screen_refraction = material_data['use_screen_refraction']
+    if 'pass_index' in material_data:
+        material.pass_index = material_data['pass_index']
+    
+    # Restore node tree if available
+    if material.use_nodes and 'nodes' in material_data:
+        deserialize_material_nodes(material.node_tree, material_data['nodes'])
+    
+    return material
+
+def deserialize_material_nodes(node_tree, nodes_data):
+    """Recreate material node tree from serialized data"""
+    if not node_tree or not nodes_data:
+        return
+    
+    # Clear existing nodes
+    node_tree.nodes.clear()
+    
+    # Recreate nodes
+    for node_data in nodes_data:
+        try:
+            node = node_tree.nodes.new(type=node_data['type'])
+            node.name = node_data['name']
+            node.location = node_data['location']
+            node.label = node_data['label']
+            node.hide = node_data['hide']
+            node.mute = node_data['mute']
+            
+            # Restore input values
+            for input_data in node_data['inputs']:
+                input_name = input_data['name']
+                if input_name in node.inputs and 'default_value' in input_data:
+                    try:
+                        if input_data['default_value'] is not None:
+                            node.inputs[input_name].default_value = input_data['default_value']
+                    except:
+                        pass  # Skip if can't set default value
+        except:
+            print(f"⚠️ Warning: Could not recreate node {node_data['name']} of type {node_data['type']}")
+            continue
+
+def save_materials_to_file(objects, materials_path):
+    """Save all materials used by objects to a JSON file"""
+    materials_data = {}
+    
+    for obj in objects:
+        if obj and hasattr(obj, 'material_slots'):
+            for slot_idx, slot in enumerate(obj.material_slots):
+                if slot.material:
+                    mat_name = slot.material.name
+                    if mat_name not in materials_data:
+                        materials_data[mat_name] = serialize_material(slot.material)
+    
+    # Save to file
+    with open(materials_path, 'w') as f:
+        json.dump(materials_data, f, indent=4)
+    
+    print(f"✅ Saved {len(materials_data)} materials to {materials_path}")
+    return materials_data
+
+def load_materials_from_file(materials_path):
+    """Load materials from JSON file and recreate them"""
+    if not os.path.exists(materials_path):
+        print(f"⚠️ Materials file not found: {materials_path}")
+        return {}
+    
+    with open(materials_path, 'r') as f:
+        materials_data = json.load(f)
+    
+    created_materials = {}
+    for mat_name, mat_data in materials_data.items():
+        material = deserialize_material(mat_data)
+        if material:
+            created_materials[mat_name] = material
+    
+    print(f"✅ Loaded {len(created_materials)} materials from {materials_path}")
+    return created_materials
+
+def apply_materials_to_objects(objects, materials_dict, object_materials_data):
+    """Apply materials to objects based on saved material assignments"""
+    for obj in objects:
+        if obj and obj.name in object_materials_data:
+            obj_materials = object_materials_data[obj.name]
+            
+            # Ensure object has enough material slots
+            while len(obj.material_slots) < len(obj_materials):
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.object.material_slot_add()
+            
+            # Apply materials to slots
+            for slot_idx, mat_name in enumerate(obj_materials):
+                if mat_name and mat_name in materials_dict:
+                    if slot_idx < len(obj.material_slots):
+                        obj.material_slots[slot_idx].material = materials_dict[mat_name]
+
+def get_object_materials_data(objects):
+    """Get material assignments for all objects"""
+    object_materials = {}
+    
+    for obj in objects:
+        if obj and hasattr(obj, 'material_slots'):
+            materials_list = []
+            for slot in obj.material_slots:
+                materials_list.append(slot.material.name if slot.material else None)
+            object_materials[obj.name] = materials_list
+    
+    return object_materials
+
 def aggressive_surface_deform_bind(obj, head_obj, context, obj_name_lower):
     """AGGRESSIVE Surface Deform binding system"""
     
@@ -1333,17 +1545,55 @@ def save_full_library(context):
         target_coll = find_grooming_collection_in_rig(rig_coll)
     
     if target_coll:
-        objs = [o for o in target_coll.all_objects if o.type in {"CURVES", "MESH"}]
-        curves = [o for o in objs if o.type == "CURVES"]
-        surfaces = [o for o in objs if o.type == "MESH"]
+        # Get ALL objects from target collection, not just CURVES and MESH
+        all_objects = list(target_coll.all_objects)
+        
+        # Separate objects by type for better organization
+        curves = [o for o in all_objects if o.type == "CURVES"]
+        surfaces = [o for o in all_objects if o.type == "MESH"]
+        empties = [o for o in all_objects if o.type == "EMPTY"]
+        lights = [o for o in all_objects if o.type == "LIGHT"]
+        cameras = [o for o in all_objects if o.type == "CAMERA"]
+        armatures = [o for o in all_objects if o.type == "ARMATURE"]
+        other_objects = [o for o in all_objects if o.type not in {"CURVES", "MESH", "EMPTY", "LIGHT", "CAMERA", "ARMATURE"}]
+        
+        # Collect node groups from all objects with modifiers
         node_groups = []
-        for o in curves:
-            for m in o.modifiers:
-                if m.type == 'NODES' and m.node_group and m.node_group not in node_groups:
-                    node_groups.append(m.node_group)
-        bpy.data.libraries.write(blend_path, set(objs + [o.data for o in objs] + node_groups), path_remap='RELATIVE')
+        for o in all_objects:
+            if hasattr(o, 'modifiers'):
+                for m in o.modifiers:
+                    if m.type == 'NODES' and m.node_group and m.node_group not in node_groups:
+                        node_groups.append(m.node_group)
+        
+        # Save all objects and their data to the blend file
+        objects_to_save = all_objects + [o.data for o in all_objects if o.data] + node_groups
+        bpy.data.libraries.write(blend_path, set(objects_to_save), path_remap='RELATIVE')
+        
+        # Save materials to separate file
+        materials_path = os.path.join(preset_dir, f"{char}_materials.json")
+        save_materials_to_file(all_objects, materials_path)
+        
+        # Get material assignments for all objects
+        object_materials_data = get_object_materials_data(all_objects)
+        
+        # Save comprehensive object data to JSON
+        json_data = {
+            "curves": [o.name for o in curves],
+            "surfaces": [o.name for o in surfaces],
+            "empties": [o.name for o in empties],
+            "lights": [o.name for o in lights],
+            "cameras": [o.name for o in cameras],
+            "armatures": [o.name for o in armatures],
+            "other_objects": [o.name for o in other_objects],
+            "all_objects": [o.name for o in all_objects],
+            "object_materials": object_materials_data
+        }
+        
         with open(json_path, 'w') as f:
-            json.dump({"curves": [o.name for o in curves], "surfaces": [o.name for o in surfaces]}, f, indent=4)
+            json.dump(json_data, f, indent=4)
+        
+        print(f"✅ Saved {len(all_objects)} objects: {len(curves)} curves, {len(surfaces)} surfaces, {len(empties)} empties, {len(lights)} lights, {len(cameras)} cameras, {len(armatures)} armatures, {len(other_objects)} other")
+        
         if props.save_preset:
             save_preset_data(preset_path, curves)
     
@@ -1435,10 +1685,24 @@ def load_full_library(context):
         with open(json_path, 'r') as f:
             data = json.load(f)
         
-        obj_names = data.get("curves", []) + data.get("surfaces", [])
+        # Load materials first
+        materials_path = os.path.join(preset_dir, f"{char}_materials.json")
+        loaded_materials = load_materials_from_file(materials_path)
+        
+        # Get all object names to load - prioritize 'all_objects' if available, fallback to individual lists
+        if 'all_objects' in data:
+            obj_names = data['all_objects']
+        else:
+            # Fallback to old format for backward compatibility
+            obj_names = data.get("curves", []) + data.get("surfaces", []) + data.get("empties", []) + data.get("lights", []) + data.get("cameras", []) + data.get("armatures", []) + data.get("other_objects", [])
+        
+        # Load all objects from blend file
+        loaded_objects = []
         with bpy.data.libraries.load(blend_path, link=False) as (from_, to_):
-            to_.objects = [n for n in obj_names if n in from_.objects]
+            # Load all objects that exist in the blend file
+            to_.objects = [n for n in from_.objects if n in obj_names or not obj_names]  # Load all if no specific names
             to_.node_groups = from_.node_groups
+            loaded_objects = to_.objects
         
         rig_coll = find_active_rig_collection(context)
         
@@ -1451,6 +1715,7 @@ def load_full_library(context):
             print(f"[IDENTILIBRARY] ❌ Could not create {type_} collection in active rig.")
             return
         
+        # Find or create type collection
         type_col = None
         for child in target_coll.children:
             if child.name.lower().startswith(type_.lower()):
@@ -1461,15 +1726,28 @@ def load_full_library(context):
             type_col = bpy.data.collections.new(type_)
             target_coll.children.link(type_col)
         
+        # Create character collection
         char_col = bpy.data.collections.new(char)
         type_col.children.link(char_col)
         
-        for o in to_.objects:
+        # Link all loaded objects to character collection
+        for o in loaded_objects:
             if o:
                 char_col.objects.link(o)
-            if o.type == 'MESH':
-                o.hide_viewport = True
-                o.hide_render = True
+                # Set visibility based on object type
+                if o.type == 'MESH':
+                    o.hide_viewport = True
+                    o.hide_render = True
+                elif o.type in {'EMPTY', 'LIGHT', 'CAMERA'}:
+                    # Keep empties, lights, cameras visible by default
+                    o.hide_viewport = False
+                    o.hide_render = False
+        
+        # Apply materials to objects
+        if loaded_materials and 'object_materials' in data:
+            apply_materials_to_objects(loaded_objects, loaded_materials, data['object_materials'])
+        
+        print(f"✅ Loaded {len(loaded_objects)} objects and linked to {char_col.name}")
         
         # AGGRESSIVE AUTO-CONNECT!
         auto_connect_objects_to_rig(context, char_col, rig_coll)
