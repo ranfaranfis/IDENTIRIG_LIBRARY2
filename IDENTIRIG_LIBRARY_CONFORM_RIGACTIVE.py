@@ -863,6 +863,203 @@ def fadeout_displacements(context, personaggio, frame_origin, frame_morph_start,
     bpy.context.scene.frame_set(bpy.context.scene.frame_current)
 
 # --------------------
+# MATERIAL SERIALIZATION FUNCTIONS
+# --------------------
+def serialize_material_safe(material):
+    """Safely serialize material data with custom properties and shadow_method fallback"""
+    if not material:
+        return None
+    
+    material_data = {
+        "name": material.name,
+        "use_nodes": material.use_nodes,
+        "blend_method": material.blend_method,
+        "shadow_method": getattr(material, 'shadow_method', 'OPAQUE'),  # Fallback for older Blender versions
+        "use_backface_culling": material.use_backface_culling,
+        "use_screen_refraction": material.use_screen_refraction,
+        "refraction_depth": material.refraction_depth,
+        "use_sss_translucency": material.use_sss_translucency,
+        "pass_index": material.pass_index,
+        "diffuse_color": list(material.diffuse_color),
+        "metallic": material.metallic,
+        "specular": material.specular,
+        "roughness": material.roughness,
+        "alpha": material.alpha,
+        "custom_properties": {}
+    }
+    
+    # Serialize custom properties safely
+    for key in material.keys():
+        try:
+            value = material[key]
+            # Only serialize JSON-compatible types
+            if isinstance(value, (str, int, float, bool, list, dict)):
+                material_data["custom_properties"][key] = value
+            elif hasattr(value, '__iter__') and not isinstance(value, str):
+                # Handle Vector, Color, etc. by converting to list
+                try:
+                    material_data["custom_properties"][key] = list(value)
+                except:
+                    # Skip non-serializable properties
+                    pass
+        except:
+            # Skip problematic custom properties
+            pass
+    
+    # Handle node tree if present
+    if material.use_nodes and material.node_tree:
+        material_data["nodes"] = serialize_material_nodes_safe(material.node_tree)
+    
+    return material_data
+
+def serialize_material_nodes_safe(node_tree):
+    """Safely serialize material node tree data"""
+    if not node_tree:
+        return None
+    
+    nodes_data = {}
+    
+    # Serialize key nodes with their properties
+    for node in node_tree.nodes:
+        if node.type in ['BSDF_PRINCIPLED', 'OUTPUT_MATERIAL', 'TEX_IMAGE', 'MIX_RGB', 'COLORMAP']:
+            node_data = {
+                "type": node.type,
+                "location": list(node.location),
+                "inputs": {}
+            }
+            
+            # Serialize input values
+            for input_socket in node.inputs:
+                try:
+                    if hasattr(input_socket, 'default_value'):
+                        value = input_socket.default_value
+                        if isinstance(value, (int, float, bool)):
+                            node_data["inputs"][input_socket.name] = value
+                        elif hasattr(value, '__iter__') and not isinstance(value, str):
+                            node_data["inputs"][input_socket.name] = list(value)
+                except:
+                    pass
+            
+            nodes_data[node.name] = node_data
+    
+    return nodes_data
+
+def deserialize_material_safe(material_data):
+    """Safely recreate material from serialized data"""
+    if not material_data:
+        return None
+    
+    material_name = material_data.get("name", "Material")
+    
+    # Create or get existing material
+    if material_name in bpy.data.materials:
+        material = bpy.data.materials[material_name]
+    else:
+        material = bpy.data.materials.new(material_name)
+    
+    # Restore basic properties
+    material.use_nodes = material_data.get("use_nodes", True)
+    material.blend_method = material_data.get("blend_method", 'OPAQUE')
+    
+    # Handle shadow_method with fallback
+    if hasattr(material, 'shadow_method'):
+        material.shadow_method = material_data.get("shadow_method", 'OPAQUE')
+    
+    material.use_backface_culling = material_data.get("use_backface_culling", False)
+    material.use_screen_refraction = material_data.get("use_screen_refraction", False)
+    material.refraction_depth = material_data.get("refraction_depth", 0.1)
+    material.use_sss_translucency = material_data.get("use_sss_translucency", False)
+    material.pass_index = material_data.get("pass_index", 0)
+    
+    # Restore color properties
+    diffuse_color = material_data.get("diffuse_color", [0.8, 0.8, 0.8, 1.0])
+    material.diffuse_color = diffuse_color
+    material.metallic = material_data.get("metallic", 0.0)
+    material.specular = material_data.get("specular", 0.5)
+    material.roughness = material_data.get("roughness", 0.5)
+    material.alpha = material_data.get("alpha", 1.0)
+    
+    # Restore custom properties
+    custom_props = material_data.get("custom_properties", {})
+    for key, value in custom_props.items():
+        try:
+            material[key] = value
+        except:
+            print(f"⚠️ Could not restore custom property '{key}' for material '{material_name}'")
+    
+    # Restore nodes if present
+    if material.use_nodes and material_data.get("nodes"):
+        restore_material_nodes_safe(material, material_data["nodes"])
+    
+    return material
+
+def restore_material_nodes_safe(material, nodes_data):
+    """Safely restore material node tree from data"""
+    if not material.node_tree or not nodes_data:
+        return
+    
+    # Find and update existing nodes
+    for node_name, node_data in nodes_data.items():
+        for node in material.node_tree.nodes:
+            if node.name == node_name and node.type == node_data.get("type"):
+                # Restore input values
+                for input_name, input_value in node_data.get("inputs", {}).items():
+                    if input_name in node.inputs:
+                        try:
+                            node.inputs[input_name].default_value = input_value
+                        except:
+                            pass
+                break
+
+def get_object_materials_data(obj):
+    """Get material slot data for an object"""
+    if not obj or not obj.material_slots:
+        return []
+    
+    materials_data = []
+    for slot_index, slot in enumerate(obj.material_slots):
+        slot_data = {
+            "slot_index": slot_index,
+            "material_name": slot.material.name if slot.material else None,
+            "material_data": serialize_material_safe(slot.material) if slot.material else None,
+            "link": slot.link
+        }
+        materials_data.append(slot_data)
+    
+    return materials_data
+
+def apply_materials_to_object(obj, materials_data):
+    """Apply materials to object slots from saved data"""
+    if not obj or not materials_data:
+        return
+    
+    # Clear existing materials
+    obj.data.materials.clear()
+    
+    # Add material slots and materials
+    for slot_data in materials_data:
+        material_name = slot_data.get("material_name")
+        material_data = slot_data.get("material_data")
+        
+        if material_data:
+            # Recreate material from data
+            material = deserialize_material_safe(material_data)
+            if material:
+                obj.data.materials.append(material)
+        elif material_name:
+            # Try to find existing material
+            existing_material = bpy.data.materials.get(material_name)
+            if existing_material:
+                obj.data.materials.append(existing_material)
+            else:
+                # Create placeholder material
+                placeholder = bpy.data.materials.new(material_name)
+                obj.data.materials.append(placeholder)
+        else:
+            # Empty slot
+            obj.data.materials.append(None)
+
+# --------------------
 # GROOMING FUNCTIONS - MORPHING FIXED!
 # --------------------
 def clear_content_collection(context, type_):
@@ -1290,6 +1487,7 @@ def save_full_library(context):
         for o in gui.all_objects:
             if o.type == 'MESH':
                 gui_data[o.name] = {"location": list(o.location)}
+    
     # === 🎛️ SALVA TUTTI I CONTROLLI DELLA GUI IDENTIRIG_GUI ===
     print("🎛️ Capturing ALL IDENTIRIG_GUI panel controls...")
     
@@ -1316,7 +1514,78 @@ def save_full_library(context):
         gui_data['SECONDARY_INTENSITY'] = {
             'secondary_intensity': secondary.secondary_intensity
         }
-        print(f"✅ Saved Secondary Intensity: {secondary.secondary_intensity}")    
+        print(f"✅ Saved Secondary Intensity: {secondary.secondary_intensity}")
+    
+    # === 🎨 ENHANCED: Save all GUI sliders and morph controls ===
+    print("🎨 Saving enhanced GUI sliders and morph controls...")
+    
+    # Save all scene custom properties (morph controls)
+    scene_props = {}
+    for key in context.scene.keys():
+        try:
+            value = context.scene[key]
+            if isinstance(value, (str, int, float, bool, list, dict)):
+                scene_props[key] = value
+            elif hasattr(value, '__iter__') and not isinstance(value, str):
+                scene_props[key] = list(value)
+        except:
+            pass
+    
+    if scene_props:
+        gui_data['SCENE_PROPERTIES'] = scene_props
+        print(f"✅ Saved {len(scene_props)} scene properties")
+    
+    # Save bone custom properties if rig exists
+    if rig_coll:
+        armature_obj = None
+        for obj in rig_coll.all_objects:
+            if obj.type == 'ARMATURE':
+                armature_obj = obj
+                break
+        
+        if armature_obj:
+            bone_props = {}
+            for bone in armature_obj.pose.bones:
+                bone_custom_props = {}
+                for key in bone.keys():
+                    try:
+                        value = bone[key]
+                        if isinstance(value, (str, int, float, bool, list, dict)):
+                            bone_custom_props[key] = value
+                        elif hasattr(value, '__iter__') and not isinstance(value, str):
+                            bone_custom_props[key] = list(value)
+                    except:
+                        pass
+                
+                if bone_custom_props:
+                    bone_props[bone.name] = bone_custom_props
+            
+            if bone_props:
+                gui_data['BONE_PROPERTIES'] = bone_props
+                print(f"✅ Saved bone properties for {len(bone_props)} bones")
+    
+    # Save property groups from all objects
+    object_props = {}
+    for obj in bpy.data.objects:
+        obj_custom_props = {}
+        for key in obj.keys():
+            try:
+                value = obj[key]
+                if isinstance(value, (str, int, float, bool, list, dict)):
+                    obj_custom_props[key] = value
+                elif hasattr(value, '__iter__') and not isinstance(value, str):
+                    obj_custom_props[key] = list(value)
+            except:
+                pass
+        
+        if obj_custom_props:
+            object_props[obj.name] = obj_custom_props
+    
+    if object_props:
+        gui_data['OBJECT_PROPERTIES'] = object_props
+        print(f"✅ Saved object properties for {len(object_props)} objects")
+    
+    # Save GUI file
     gui_path = os.path.join(props.library_path, f"{char}_gui.json")
     with open(gui_path, 'w') as f:
         json.dump(gui_data, f, indent=4)
@@ -1336,14 +1605,60 @@ def save_full_library(context):
         objs = [o for o in target_coll.all_objects if o.type in {"CURVES", "MESH"}]
         curves = [o for o in objs if o.type == "CURVES"]
         surfaces = [o for o in objs if o.type == "MESH"]
+        
+        # === 🎨 ENHANCED: Save accessory/grooming data with materials ===
+        print("🎨 Saving enhanced accessory/grooming data with materials...")
+        
+        enhanced_data = {
+            "curves": [],
+            "surfaces": [],
+            "accessories": {}
+        }
+        
+        # Save curves with basic info
+        for curve in curves:
+            enhanced_data["curves"].append(curve.name)
+        
+        # Save surfaces/accessories with materials
+        for surface in surfaces:
+            surface_data = {
+                "name": surface.name,
+                "materials": get_object_materials_data(surface),
+                "custom_properties": {}
+            }
+            
+            # Save custom properties
+            for key in surface.keys():
+                try:
+                    value = surface[key]
+                    if isinstance(value, (str, int, float, bool, list, dict)):
+                        surface_data["custom_properties"][key] = value
+                    elif hasattr(value, '__iter__') and not isinstance(value, str):
+                        surface_data["custom_properties"][key] = list(value)
+                except:
+                    pass
+            
+            enhanced_data["surfaces"].append(surface.name)
+            enhanced_data["accessories"][surface.name] = surface_data
+        
+        # Save node groups
         node_groups = []
         for o in curves:
             for m in o.modifiers:
                 if m.type == 'NODES' and m.node_group and m.node_group not in node_groups:
                     node_groups.append(m.node_group)
+        
+        # Save blend file
         bpy.data.libraries.write(blend_path, set(objs + [o.data for o in objs] + node_groups), path_remap='RELATIVE')
+        
+        # Save enhanced JSON data
         with open(json_path, 'w') as f:
-            json.dump({"curves": [o.name for o in curves], "surfaces": [o.name for o in surfaces]}, f, indent=4)
+            json.dump(enhanced_data, f, indent=4)
+        
+        print(f"✅ Saved enhanced data for {len(curves)} curves and {len(surfaces)} surfaces")
+        print(f"✅ Saved material data for {len(enhanced_data['accessories'])} accessories")
+        
+        # Save preset data
         if props.save_preset:
             save_preset_data(preset_path, curves)
     
@@ -1379,7 +1694,7 @@ def load_full_library(context):
     if props.replace_grooming:
         clear_content_collection(context, type_)
     
-    # Load GUI data
+    # === 🎨 ENHANCED: Load GUI data with all controls ===
     if os.path.exists(gui_path):
         with open(gui_path, 'r') as f:
             data = json.load(f)
@@ -1391,13 +1706,15 @@ def load_full_library(context):
             print("[IDENTILIBRARY] ❌ GUI not found for active rig.")
             return
         
+        # Load basic GUI objects
         for name, info in data.items():
-            matches = [obj for obj in gui.all_objects if obj.name.startswith(name)]
-            for o in matches:
-                o.location = info["location"]
-                o.keyframe_insert(data_path="location", frame=frame)
+            if isinstance(info, dict) and "location" in info:
+                matches = [obj for obj in gui.all_objects if obj.name.startswith(name)]
+                for o in matches:
+                    o.location = info["location"]
+                    o.keyframe_insert(data_path="location", frame=frame)
         
-        # 2. 🆕 RIPRISTINA TUTTI I PANNELLI CONTROLLI
+        # Load panel controls
         print(f"🎛️ Loading ALL GUI controls for character: {char}")
         
         # Wrinkles Intensity
@@ -1413,29 +1730,87 @@ def load_full_library(context):
                 wrinkles.secondary_intensity = wrinkles_data['secondary_intensity']
                 print(f"✅ Restored Secondary Wrinkles: {wrinkles_data['secondary_intensity']}")
         
-        # Expression Intensity (se esiste)
+        # Expression Intensity
         if 'EXPRESSION_INTENSITY' in data and hasattr(context.scene, 'expr_intensity_props'):
             expr_data = data['EXPRESSION_INTENSITY']
             expr = context.scene.expr_intensity_props
             expr.expression_intensity = expr_data['expression_intensity']
             print(f"✅ Restored Expression Intensity: {expr_data['expression_intensity']}")
         
-        # Secondary Intensity (se esiste)
+        # Secondary Intensity
         if 'SECONDARY_INTENSITY' in data and hasattr(context.scene, 'secondary_intensity_props'):
             secondary_data = data['SECONDARY_INTENSITY']
             secondary = context.scene.secondary_intensity_props
             secondary.secondary_intensity = secondary_data['secondary_intensity']
             print(f"✅ Restored Secondary Intensity: {secondary_data['secondary_intensity']}")
         
-        # 📊 SUMMARY
-        total_restored = sum(1 for key in data.keys() if key != 'location')
-        print(f"🎉 TOTAL GUI PANELS RESTORED: {total_restored}")    
-    # Load content data
+        # === 🎨 ENHANCED: Load expanded GUI controls ===
+        
+        # Load scene properties (morph controls)
+        if 'SCENE_PROPERTIES' in data:
+            scene_props = data['SCENE_PROPERTIES']
+            for key, value in scene_props.items():
+                try:
+                    context.scene[key] = value
+                except:
+                    print(f"⚠️ Could not restore scene property '{key}'")
+            print(f"✅ Restored {len(scene_props)} scene properties")
+        
+        # Load bone properties
+        if 'BONE_PROPERTIES' in data:
+            bone_props = data['BONE_PROPERTIES']
+            armature_obj = None
+            
+            if rig_coll:
+                for obj in rig_coll.all_objects:
+                    if obj.type == 'ARMATURE':
+                        armature_obj = obj
+                        break
+            
+            if armature_obj:
+                for bone_name, bone_custom_props in bone_props.items():
+                    if bone_name in armature_obj.pose.bones:
+                        bone = armature_obj.pose.bones[bone_name]
+                        for key, value in bone_custom_props.items():
+                            try:
+                                bone[key] = value
+                            except:
+                                print(f"⚠️ Could not restore bone property '{key}' for bone '{bone_name}'")
+                print(f"✅ Restored bone properties for {len(bone_props)} bones")
+        
+        # Load object properties
+        if 'OBJECT_PROPERTIES' in data:
+            object_props = data['OBJECT_PROPERTIES']
+            for obj_name, obj_custom_props in object_props.items():
+                if obj_name in bpy.data.objects:
+                    obj = bpy.data.objects[obj_name]
+                    for key, value in obj_custom_props.items():
+                        try:
+                            obj[key] = value
+                        except:
+                            print(f"⚠️ Could not restore object property '{key}' for object '{obj_name}'")
+            print(f"✅ Restored object properties for {len(object_props)} objects")
+        
+        # Summary
+        total_restored = sum(1 for key in data.keys() if key in ['WRINKLES_INTENSITY', 'EXPRESSION_INTENSITY', 'SECONDARY_INTENSITY', 'SCENE_PROPERTIES', 'BONE_PROPERTIES', 'OBJECT_PROPERTIES'])
+        print(f"🎉 TOTAL GUI PANELS RESTORED: {total_restored}")
+    
+    # === 🎨 ENHANCED: Load content data with materials ===
     if os.path.exists(blend_path) and os.path.exists(json_path):
         with open(json_path, 'r') as f:
             data = json.load(f)
         
-        obj_names = data.get("curves", []) + data.get("surfaces", [])
+        # Handle both old and new data formats
+        if "curves" in data and "surfaces" in data:
+            # New format with enhanced data
+            obj_names = data.get("curves", []) + data.get("surfaces", [])
+            accessory_data = data.get("accessories", {})
+        else:
+            # Old format fallback
+            obj_names = data.get("curves", []) + data.get("surfaces", [])
+            accessory_data = {}
+        
+        # Load objects
         with bpy.data.libraries.load(blend_path, link=False) as (from_, to_):
             to_.objects = [n for n in obj_names if n in from_.objects]
             to_.node_groups = from_.node_groups
@@ -1464,12 +1839,32 @@ def load_full_library(context):
         char_col = bpy.data.collections.new(char)
         type_col.children.link(char_col)
         
+        # Link objects and apply materials
         for o in to_.objects:
             if o:
                 char_col.objects.link(o)
-            if o.type == 'MESH':
-                o.hide_viewport = True
-                o.hide_render = True
+                
+                # === 🎨 ENHANCED: Apply materials to accessories ===
+                if o.name in accessory_data:
+                    accessory_info = accessory_data[o.name]
+                    
+                    # Restore custom properties
+                    custom_props = accessory_info.get("custom_properties", {})
+                    for key, value in custom_props.items():
+                        try:
+                            o[key] = value
+                        except:
+                            print(f"⚠️ Could not restore custom property '{key}' for object '{o.name}'")
+                    
+                    # Apply materials
+                    materials_data = accessory_info.get("materials", [])
+                    if materials_data:
+                        apply_materials_to_object(o, materials_data)
+                        print(f"✅ Applied {len(materials_data)} materials to {o.name}")
+                
+                if o.type == 'MESH':
+                    o.hide_viewport = True
+                    o.hide_render = True
         
         # AGGRESSIVE AUTO-CONNECT!
         auto_connect_objects_to_rig(context, char_col, rig_coll)
@@ -1506,6 +1901,8 @@ def load_full_library(context):
                             p.inputs[3].keyframe_insert("default_value", frame=frame)
                             p.inputs[4].keyframe_insert("default_value", frame=frame)
                             p.inputs[5].keyframe_insert("default_value", frame=frame)
+        
+        print(f"✅ Loaded {len(to_.objects)} objects with enhanced material support")
     
     apply_displacement_from_json(context, props.library_path, char, set_keyframes=True, frame=frame)
     if char not in character_origin_frames:
