@@ -930,6 +930,240 @@ def load_preset_data(filepath):
     with open(filepath, 'r') as f:
         return json.load(f)
 
+def get_blender_version():
+    """Get Blender version for compatibility checks"""
+    return bpy.app.version
+
+def safe_get_material_property(material, prop_name, default_value=None):
+    """Safely get material property with fallback"""
+    if hasattr(material, prop_name):
+        return getattr(material, prop_name)
+    else:
+        print(f"⚠️ Property '{prop_name}' not available - using default: {default_value}")
+        return default_value
+
+def save_material_complete(material):
+    """🖼️ SALVA MATERIALE COMPLETO CON NODE TREE - VERSIONE COMPATIBILE"""
+    print(f"🖼️ Saving complete material: {material.name}")
+    
+    material_data = {
+        'name': material.name,
+        'use_nodes': material.use_nodes,
+        'nodes': {},
+        'links': [],
+        'properties': {}
+    }
+    
+    # Basic material properties with compatibility checks
+    material_data['properties'] = {
+        'metallic': safe_get_material_property(material, 'metallic', 0.0),
+        'roughness': safe_get_material_property(material, 'roughness', 0.5),
+        'use_backface_culling': safe_get_material_property(material, 'use_backface_culling', False),
+        'blend_method': safe_get_material_property(material, 'blend_method', 'OPAQUE'),
+    }
+    
+    # Check for deprecated properties
+    if hasattr(material, 'shadow_method'):
+        material_data['properties']['shadow_method'] = material.shadow_method
+    else:
+        print(f"⚠️ shadow_method not available for {material.name} - using default")
+        material_data['properties']['shadow_method'] = 'OPAQUE'  # Default fallback
+    
+    # Additional material properties with compatibility checks
+    material_data['properties']['use_transparent_shadow'] = safe_get_material_property(material, 'use_transparent_shadow', False)
+    material_data['properties']['alpha_threshold'] = safe_get_material_property(material, 'alpha_threshold', 0.5)
+    material_data['properties']['use_screen_refraction'] = safe_get_material_property(material, 'use_screen_refraction', False)
+    material_data['properties']['refraction_depth'] = safe_get_material_property(material, 'refraction_depth', 0.1)
+    
+    # Save node tree if using nodes
+    if material.use_nodes and material.node_tree:
+        print(f"🔗 Saving node tree for {material.name}")
+        for node in material.node_tree.nodes:
+            try:
+                node_data = {
+                    'type': node.type,
+                    'location': list(node.location),
+                    'inputs': {},
+                    'outputs': {}
+                }
+                
+                # Save input values
+                for input_socket in node.inputs:
+                    try:
+                        if hasattr(input_socket, 'default_value'):
+                            node_data['inputs'][input_socket.name] = input_socket.default_value
+                    except Exception as e:
+                        print(f"⚠️ Could not save input {input_socket.name}: {e}")
+                
+                material_data['nodes'][node.name] = node_data
+                
+            except Exception as e:
+                print(f"⚠️ Could not save node {node.name}: {e}")
+                
+        # Save links
+        for link in material.node_tree.links:
+            try:
+                link_data = {
+                    'from_node': link.from_node.name,
+                    'from_socket': link.from_socket.name,
+                    'to_node': link.to_node.name,
+                    'to_socket': link.to_socket.name
+                }
+                material_data['links'].append(link_data)
+            except Exception as e:
+                print(f"⚠️ Could not save link: {e}")
+    
+    print(f"✅ Material {material.name} saved successfully with {len(material_data['nodes'])} nodes and {len(material_data['links'])} links")
+    return material_data
+
+def load_material_complete(material_data, target_material=None):
+    """🖼️ CARICA MATERIALE COMPLETO CON NODE TREE - VERSIONE COMPATIBILE"""
+    material_name = material_data.get('name', 'UnknownMaterial')
+    print(f"🖼️ Loading complete material: {material_name}")
+    
+    # Get or create material
+    if target_material is None:
+        if material_name in bpy.data.materials:
+            material = bpy.data.materials[material_name]
+        else:
+            material = bpy.data.materials.new(name=material_name)
+    else:
+        material = target_material
+    
+    # Set use_nodes
+    material.use_nodes = material_data.get('use_nodes', True)
+    
+    # Load properties with compatibility checks
+    properties = material_data.get('properties', {})
+    
+    # Apply basic material properties safely
+    for prop_name, value in properties.items():
+        if prop_name == 'shadow_method':
+            # Handle deprecated shadow_method property
+            if hasattr(material, 'shadow_method'):
+                material.shadow_method = value
+            else:
+                print(f"⚠️ shadow_method not available for {material.name} - skipping")
+        else:
+            # Use safe property setting for other properties
+            if hasattr(material, prop_name):
+                try:
+                    setattr(material, prop_name, value)
+                    print(f"✅ Set {prop_name} = {value} for {material.name}")
+                except Exception as e:
+                    print(f"⚠️ Could not set {prop_name} for {material.name}: {e}")
+            else:
+                print(f"⚠️ Property '{prop_name}' not available for {material.name} - skipping")
+    
+    # Load node tree if available
+    if material.use_nodes and material.node_tree and material_data.get('nodes'):
+        print(f"🔗 Loading node tree for {material.name}")
+        
+        # Clear existing nodes
+        material.node_tree.nodes.clear()
+        
+        # Recreate nodes
+        for node_name, node_data in material_data['nodes'].items():
+            try:
+                node = material.node_tree.nodes.new(type=node_data['type'])
+                node.name = node_name
+                node.location = node_data['location']
+                
+                # Set input values
+                for input_name, value in node_data.get('inputs', {}).items():
+                    if input_name in node.inputs:
+                        try:
+                            node.inputs[input_name].default_value = value
+                        except Exception as e:
+                            print(f"⚠️ Could not set input {input_name} for node {node_name}: {e}")
+                
+            except Exception as e:
+                print(f"⚠️ Could not create node {node_name}: {e}")
+        
+        # Recreate links
+        for link_data in material_data.get('links', []):
+            try:
+                from_node = material.node_tree.nodes.get(link_data['from_node'])
+                to_node = material.node_tree.nodes.get(link_data['to_node'])
+                
+                if from_node and to_node:
+                    from_socket = from_node.outputs.get(link_data['from_socket'])
+                    to_socket = to_node.inputs.get(link_data['to_socket'])
+                    
+                    if from_socket and to_socket:
+                        material.node_tree.links.new(from_socket, to_socket)
+                    else:
+                        print(f"⚠️ Could not find sockets for link in {material.name}")
+                else:
+                    print(f"⚠️ Could not find nodes for link in {material.name}")
+                    
+            except Exception as e:
+                print(f"⚠️ Could not create link in {material.name}: {e}")
+    
+    print(f"✅ Material {material.name} loaded successfully")
+    return material
+
+def save_all_materials_for_character(character_name, library_path):
+    """Save all materials used by a character with compatibility checks"""
+    print(f"🖼️ Saving all materials for character: {character_name}")
+    
+    materials_data = {}
+    saved_materials = set()
+    
+    # Find all materials used by objects in the scene
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH' and obj.data.materials:
+            for material in obj.data.materials:
+                if material and material.name not in saved_materials:
+                    try:
+                        materials_data[material.name] = save_material_complete(material)
+                        saved_materials.add(material.name)
+                    except Exception as e:
+                        print(f"❌ Failed to save material {material.name}: {e}")
+    
+    # Save materials to file
+    if materials_data:
+        materials_file = os.path.join(library_path, f"{character_name}_materials.json")
+        os.makedirs(library_path, exist_ok=True)
+        
+        with open(materials_file, 'w') as f:
+            json.dump(materials_data, f, indent=4)
+        
+        print(f"✅ Saved {len(materials_data)} materials for {character_name}")
+        return materials_file
+    else:
+        print(f"⚠️ No materials found for {character_name}")
+        return None
+
+def load_all_materials_for_character(character_name, library_path):
+    """Load all materials for a character with compatibility checks"""
+    print(f"🖼️ Loading all materials for character: {character_name}")
+    
+    materials_file = os.path.join(library_path, f"{character_name}_materials.json")
+    
+    if not os.path.exists(materials_file):
+        print(f"⚠️ Materials file not found: {materials_file}")
+        return False
+    
+    try:
+        with open(materials_file, 'r') as f:
+            materials_data = json.load(f)
+        
+        loaded_count = 0
+        for material_name, material_data in materials_data.items():
+            try:
+                load_material_complete(material_data)
+                loaded_count += 1
+            except Exception as e:
+                print(f"❌ Failed to load material {material_name}: {e}")
+        
+        print(f"✅ Loaded {loaded_count} materials for {character_name}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to load materials file: {e}")
+        return False
+
 def key_and_zero_previous(context, character, type_, offset=10):
     """FIXED MORPHING: Key all grooming of that character, then zero it"""
     if not character: 
@@ -1347,6 +1581,17 @@ def save_full_library(context):
         if props.save_preset:
             save_preset_data(preset_path, curves)
     
+    # 🖼️ SAVE ALL MATERIALS FOR THE CHARACTER WITH COMPATIBILITY CHECKS
+    print("🖼️ Saving all materials for character...")
+    try:
+        materials_file = save_all_materials_for_character(char, props.library_path)
+        if materials_file:
+            print(f"✅ Materials saved successfully: {materials_file}")
+        else:
+            print("⚠️ No materials to save")
+    except Exception as e:
+        print(f"❌ Failed to save materials: {e}")
+    
     # Return snapshot path for potential FTP upload
     return snapshot_path
 
@@ -1506,6 +1751,17 @@ def load_full_library(context):
                             p.inputs[3].keyframe_insert("default_value", frame=frame)
                             p.inputs[4].keyframe_insert("default_value", frame=frame)
                             p.inputs[5].keyframe_insert("default_value", frame=frame)
+    
+    # 🖼️ LOAD ALL MATERIALS FOR THE CHARACTER WITH COMPATIBILITY CHECKS
+    print("🖼️ Loading all materials for character...")
+    try:
+        materials_loaded = load_all_materials_for_character(char, props.library_path)
+        if materials_loaded:
+            print(f"✅ Materials loaded successfully for {char}")
+        else:
+            print("⚠️ No materials file found or failed to load")
+    except Exception as e:
+        print(f"❌ Failed to load materials: {e}")
     
     apply_displacement_from_json(context, props.library_path, char, set_keyframes=True, frame=frame)
     if char not in character_origin_frames:
