@@ -1,0 +1,15 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test files
+/tmp/test_*.py
+
+# Blender temporary files
+*.blend1
+*.blend2
+
+# OS files
+.DS_Store
+Thumbs.db
