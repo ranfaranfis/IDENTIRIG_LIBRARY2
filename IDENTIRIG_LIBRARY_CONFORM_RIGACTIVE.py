@@ -47,6 +47,24 @@ def get_selected_types(context):
     
     return selected_types
 
+# Blender 4.x compatibility helper for material properties
+def safe_get_material_property(material, property_name, default_value=None):
+    """Safely get material property with Blender 4.x compatibility"""
+    if hasattr(material, property_name):
+        return getattr(material, property_name)
+    else:
+        print(f"⚠️ Material property '{property_name}' not found (Blender 4.x compatibility)")
+        return default_value
+
+def safe_set_material_property(material, property_name, value):
+    """Safely set material property with Blender 4.x compatibility"""
+    if hasattr(material, property_name):
+        setattr(material, property_name, value)
+        return True
+    else:
+        print(f"⚠️ Material property '{property_name}' not found (Blender 4.x compatibility)")
+        return False
+
 # === CHARACTER PREVIEW ITEM CLASS ===
 class CharacterPreviewItem(PropertyGroup):
     name: StringProperty()
@@ -1585,6 +1603,12 @@ class UNIFIEDLIB_OT_save(Operator):
             self.report({'ERROR'}, "Character name cannot be empty!")
             return {'CANCELLED'}
         
+        # Validate that at least one type is selected
+        selected_types = get_selected_types(context)
+        if not selected_types:
+            self.report({'ERROR'}, "Please select at least one type (Hair, Beard, Eyebrows, or Accessories)!")
+            return {'CANCELLED'}
+        
         save_prefs_library_path(context)
         char = props.character_name
         frame_now = bpy.context.scene.frame_current
@@ -1652,6 +1676,12 @@ class UNIFIEDLIB_OT_load(Operator):
             self.report({'ERROR'}, "No IDENTIRIG rig selected! Use picker to select one.")
             return {'CANCELLED'}
         
+        # Validate that at least one type is selected
+        selected_types = get_selected_types(context)
+        if not selected_types:
+            self.report({'ERROR'}, "Please select at least one type (Hair, Beard, Eyebrows, or Accessories)!")
+            return {'CANCELLED'}
+        
         char = props.character_name
         frame_now = bpy.context.scene.frame_current
         offset = props.transition_frames
@@ -1659,7 +1689,6 @@ class UNIFIEDLIB_OT_load(Operator):
 
         if morphing and previous_character and previous_character != char:
             # Handle morphing for each selected type
-            selected_types = get_selected_types(context)
             for type_ in selected_types:
                 key_and_zero_previous(context, previous_character, type_, offset)
 
