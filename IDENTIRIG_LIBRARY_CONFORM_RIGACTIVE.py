@@ -30,6 +30,41 @@ TYPES = [
     ("ACCESSORIES", "Accessories", "")
 ]
 
+# Helper function to get selected types from checkboxes
+def get_selected_types(context):
+    """Get list of selected types from checkbox properties"""
+    selected_types = []
+    scene = context.scene
+    
+    if scene.type_hair:
+        selected_types.append("HAIR")
+    if scene.type_beard:
+        selected_types.append("BEARD")
+    if scene.type_eyebrows:
+        selected_types.append("EYEBROWS_GN")
+    if scene.type_accessories:
+        selected_types.append("ACCESSORIES")
+    
+    return selected_types
+
+# Blender 4.x compatibility helper for material properties
+def safe_get_material_property(material, property_name, default_value=None):
+    """Safely get material property with Blender 4.x compatibility"""
+    if hasattr(material, property_name):
+        return getattr(material, property_name)
+    else:
+        print(f"⚠️ Material property '{property_name}' not found (Blender 4.x compatibility)")
+        return default_value
+
+def safe_set_material_property(material, property_name, value):
+    """Safely set material property with Blender 4.x compatibility"""
+    if hasattr(material, property_name):
+        setattr(material, property_name, value)
+        return True
+    else:
+        print(f"⚠️ Material property '{property_name}' not found (Blender 4.x compatibility)")
+        return False
+
 # === CHARACTER PREVIEW ITEM CLASS ===
 class CharacterPreviewItem(PropertyGroup):
     name: StringProperty()
@@ -59,7 +94,11 @@ class LibraryPreviewProps(PropertyGroup):
 # --- Scene properties for Identirig Library ---
 bpy.types.Scene.library_path        = StringProperty(name="Library Path", subtype='DIR_PATH')
 bpy.types.Scene.character_name      = StringProperty(name="Character Name")
-bpy.types.Scene.chosen_type         = EnumProperty(name="Type", items=TYPES, default="HAIR")
+# Replace dropdown with checkboxes for multiple type selection
+bpy.types.Scene.type_hair           = BoolProperty(name="Hair", default=True)
+bpy.types.Scene.type_beard          = BoolProperty(name="Beard", default=False)
+bpy.types.Scene.type_eyebrows       = BoolProperty(name="Eyebrows", default=False)
+bpy.types.Scene.type_accessories    = BoolProperty(name="Accessories", default=False)
 bpy.types.Scene.ftp_selected_file   = EnumProperty(name="FTP Characters", items=lambda self, context: ftp_file_list)
 bpy.types.Scene.local_selected_file = EnumProperty(name="Local Characters", items=lambda self, context: local_file_list)
 bpy.types.Scene.replace_grooming    = BoolProperty(name="Replace Content", default=True)
@@ -1273,7 +1312,12 @@ def refresh_local_list(path):
 # -------------
 def save_full_library(context):
     props = context.scene
-    char, type_ = props.character_name, props.chosen_type
+    char = props.character_name
+    selected_types = get_selected_types(context)
+    
+    if not selected_types:
+        print("⚠️ No types selected for saving!")
+        return None
     
     rig_coll = find_active_rig_collection(context)
     gui = find_gui_collection_in_rig(rig_coll) if rig_coll else None
@@ -1317,53 +1361,68 @@ def save_full_library(context):
             'secondary_intensity': secondary.secondary_intensity
         }
         print(f"✅ Saved Secondary Intensity: {secondary.secondary_intensity}")    
+    # Save GUI data once for all types
     gui_path = os.path.join(props.library_path, f"{char}_gui.json")
     with open(gui_path, 'w') as f:
         json.dump(gui_data, f, indent=4)
     
-    preset_dir = os.path.join(props.library_path, type_, char)
-    os.makedirs(preset_dir, exist_ok=True)
-    blend_path = os.path.join(preset_dir, f"{char}.blend")
-    json_path = os.path.join(preset_dir, f"{char}.json")
-    preset_path = os.path.join(preset_dir, f"preset.json")
+    # Save each selected type
+    for type_ in selected_types:
+        print(f"💾 Saving type: {type_}")
+        
+        preset_dir = os.path.join(props.library_path, type_, char)
+        os.makedirs(preset_dir, exist_ok=True)
+        blend_path = os.path.join(preset_dir, f"{char}.blend")
+        json_path = os.path.join(preset_dir, f"{char}.json")
+        preset_path = os.path.join(preset_dir, f"preset.json")
+        
+        if type_ == "ACCESSORIES":
+            target_coll = find_accessories_collection_in_rig(rig_coll)
+        else:
+            target_coll = find_grooming_collection_in_rig(rig_coll)
+        
+        if target_coll:
+            objs = [o for o in target_coll.all_objects if o.type in {"CURVES", "MESH"}]
+            curves = [o for o in objs if o.type == "CURVES"]
+            surfaces = [o for o in objs if o.type == "MESH"]
+            node_groups = []
+            for o in curves:
+                for m in o.modifiers:
+                    if m.type == 'NODES' and m.node_group and m.node_group not in node_groups:
+                        node_groups.append(m.node_group)
+            bpy.data.libraries.write(blend_path, set(objs + [o.data for o in objs] + node_groups), path_remap='RELATIVE')
+            with open(json_path, 'w') as f:
+                json.dump({"curves": [o.name for o in curves], "surfaces": [o.name for o in surfaces]}, f, indent=4)
+            if props.save_preset:
+                save_preset_data(preset_path, curves)
+        
+        print(f"✅ Saved type {type_} successfully")
     
-    if type_ == "ACCESSORIES":
-        target_coll = find_accessories_collection_in_rig(rig_coll)
-    else:
-        target_coll = find_grooming_collection_in_rig(rig_coll)
-    
-    if target_coll:
-        objs = [o for o in target_coll.all_objects if o.type in {"CURVES", "MESH"}]
-        curves = [o for o in objs if o.type == "CURVES"]
-        surfaces = [o for o in objs if o.type == "MESH"]
-        node_groups = []
-        for o in curves:
-            for m in o.modifiers:
-                if m.type == 'NODES' and m.node_group and m.node_group not in node_groups:
-                    node_groups.append(m.node_group)
-        bpy.data.libraries.write(blend_path, set(objs + [o.data for o in objs] + node_groups), path_remap='RELATIVE')
-        with open(json_path, 'w') as f:
-            json.dump({"curves": [o.name for o in curves], "surfaces": [o.name for o in surfaces]}, f, indent=4)
-        if props.save_preset:
-            save_preset_data(preset_path, curves)
+    print(f"🎉 Successfully saved {len(selected_types)} types: {', '.join(selected_types)}")
     
     # Return snapshot path for potential FTP upload
     return snapshot_path
 
 def load_full_library(context):
     props = context.scene
-    char, type_ = props.character_name, props.chosen_type
+    char = props.character_name
+    selected_types = get_selected_types(context)
+    
+    if not selected_types:
+        print("⚠️ No types selected for loading!")
+        return
+    
+    # For morphing, we need to handle existing logic
+    # For now, use the first selected type for morphing compatibility
+    primary_type = selected_types[0]
+    
     offset = props.transition_frames
     morphing = props.do_morphing
     frame = bpy.context.scene.frame_current
     
     gui_path = os.path.join(props.library_path, f"{char}_gui.json")
-    preset_dir = os.path.join(props.library_path, type_, char)
-    blend_path = os.path.join(preset_dir, f"{char}.blend")
-    json_path = os.path.join(preset_dir, f"{char}.json")
-    preset_path = os.path.join(preset_dir, "preset.json")
-    preset_data = load_preset_data(preset_path)
     
+    # Handle morphing for all selected types
     if morphing:
         for prev_char, frame_origin in character_origin_frames.items():
             if prev_char != char:
@@ -1376,8 +1435,10 @@ def load_full_library(context):
                     props.library_path
                 )
     
+    # Clear content for each selected type if replace_grooming is enabled
     if props.replace_grooming:
-        clear_content_collection(context, type_)
+        for type_ in selected_types:
+            clear_content_collection(context, type_)
     
     # Load GUI data
     if os.path.exists(gui_path):
@@ -1430,82 +1491,97 @@ def load_full_library(context):
         # 📊 SUMMARY
         total_restored = sum(1 for key in data.keys() if key != 'location')
         print(f"🎉 TOTAL GUI PANELS RESTORED: {total_restored}")    
-    # Load content data
-    if os.path.exists(blend_path) and os.path.exists(json_path):
-        with open(json_path, 'r') as f:
-            data = json.load(f)
+    # Load content data for each selected type
+    for type_ in selected_types:
+        print(f"🔄 Loading type: {type_}")
         
-        obj_names = data.get("curves", []) + data.get("surfaces", [])
-        with bpy.data.libraries.load(blend_path, link=False) as (from_, to_):
-            to_.objects = [n for n in obj_names if n in from_.objects]
-            to_.node_groups = from_.node_groups
+        preset_dir = os.path.join(props.library_path, type_, char)
+        blend_path = os.path.join(preset_dir, f"{char}.blend")
+        json_path = os.path.join(preset_dir, f"{char}.json")
+        preset_path = os.path.join(preset_dir, "preset.json")
+        preset_data = load_preset_data(preset_path)
         
-        rig_coll = find_active_rig_collection(context)
-        
-        if type_ == "ACCESSORIES":
-            target_coll = find_accessories_collection_in_rig(rig_coll)
-        else:
-            target_coll = find_grooming_collection_in_rig(rig_coll)
-        
-        if not target_coll:
-            print(f"[IDENTILIBRARY] ❌ Could not create {type_} collection in active rig.")
-            return
-        
-        type_col = None
-        for child in target_coll.children:
-            if child.name.lower().startswith(type_.lower()):
-                type_col = child
-                break
-        
-        if not type_col:
-            type_col = bpy.data.collections.new(type_)
-            target_coll.children.link(type_col)
-        
-        char_col = bpy.data.collections.new(char)
-        type_col.children.link(char_col)
-        
-        for o in to_.objects:
-            if o:
-                char_col.objects.link(o)
-            if o.type == 'MESH':
-                o.hide_viewport = True
-                o.hide_render = True
-        
-        # AGGRESSIVE AUTO-CONNECT!
-        auto_connect_objects_to_rig(context, char_col, rig_coll)
-        
-        # FIXED MORPHING: Set up new character with zero values first, then preset values
-        if morphing:
-            # Set to zero at start frame for new character
-            bpy.context.scene.frame_set(frame - offset)
+        if os.path.exists(blend_path) and os.path.exists(json_path):
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            
+            obj_names = data.get("curves", []) + data.get("surfaces", [])
+            with bpy.data.libraries.load(blend_path, link=False) as (from_, to_):
+                to_.objects = [n for n in obj_names if n in from_.objects]
+                to_.node_groups = from_.node_groups
+            
+            rig_coll = find_active_rig_collection(context)
+            
+            if type_ == "ACCESSORIES":
+                target_coll = find_accessories_collection_in_rig(rig_coll)
+            else:
+                target_coll = find_grooming_collection_in_rig(rig_coll)
+            
+            if not target_coll:
+                print(f"[IDENTILIBRARY] ❌ Could not create {type_} collection in active rig.")
+                continue
+            
+            type_col = None
+            for child in target_coll.children:
+                if child.name.lower().startswith(type_.lower()):
+                    type_col = child
+                    break
+            
+            if not type_col:
+                type_col = bpy.data.collections.new(type_)
+                target_coll.children.link(type_col)
+            
+            char_col = bpy.data.collections.new(f"{char}_{type_}")
+            type_col.children.link(char_col)
+            
+            for o in to_.objects:
+                if o:
+                    char_col.objects.link(o)
+                if o.type == 'MESH':
+                    o.hide_viewport = True
+                    o.hide_render = True
+            
+            # AGGRESSIVE AUTO-CONNECT!
+            auto_connect_objects_to_rig(context, char_col, rig_coll)
+            
+            # FIXED MORPHING: Set up new character with zero values first, then preset values
+            if morphing:
+                # Set to zero at start frame for new character
+                bpy.context.scene.frame_set(frame - offset)
+                for obj in char_col.all_objects:
+                    if obj.type == 'CURVES':
+                        key_geometry_nodes_inputs(obj, frame - offset, value=0.0)
+            
+            # Load character at current frame with preset values
+            bpy.context.scene.frame_set(frame)
             for obj in char_col.all_objects:
                 if obj.type == 'CURVES':
-                    key_geometry_nodes_inputs(obj, frame - offset, value=0.0)
-        
-        # Load character at current frame with preset values
-        bpy.context.scene.frame_set(frame)
-        for obj in char_col.all_objects:
-            if obj.type == 'CURVES':
-                defaults = preset_data.get(obj.name, {})
-                for mod in obj.modifiers:
-                    if mod.type == 'NODES' and mod.node_group:
-                        nodes = mod.node_group.nodes
-                        if "Density_Ctl" in nodes:
-                            v = defaults.get("grooming_default_density", 1.0)
-                            nodes["Density_Ctl"].inputs[0].default_value = v
-                            nodes["Density_Ctl"].inputs[0].keyframe_insert("default_value", frame=frame)
-                        if "TrimLength_Ctl" in nodes:
-                            v = defaults.get("grooming_default_length", 1.0)
-                            nodes["TrimLength_Ctl"].inputs[0].default_value = v
-                            nodes["TrimLength_Ctl"].inputs[0].keyframe_insert("default_value", frame=frame)
-                        if "FHTG_SetHairCurveProfile" in nodes:
-                            p = nodes["FHTG_SetHairCurveProfile"]
-                            p.inputs[3].default_value = defaults.get("grooming_default_shape", 0.3)
-                            p.inputs[4].default_value = defaults.get("grooming_default_size", 0.3)
-                            p.inputs[5].default_value = defaults.get("grooming_default_root", 0.3)
-                            p.inputs[3].keyframe_insert("default_value", frame=frame)
-                            p.inputs[4].keyframe_insert("default_value", frame=frame)
-                            p.inputs[5].keyframe_insert("default_value", frame=frame)
+                    defaults = preset_data.get(obj.name, {})
+                    for mod in obj.modifiers:
+                        if mod.type == 'NODES' and mod.node_group:
+                            nodes = mod.node_group.nodes
+                            if "Density_Ctl" in nodes:
+                                v = defaults.get("grooming_default_density", 1.0)
+                                nodes["Density_Ctl"].inputs[0].default_value = v
+                                nodes["Density_Ctl"].inputs[0].keyframe_insert("default_value", frame=frame)
+                            if "TrimLength_Ctl" in nodes:
+                                v = defaults.get("grooming_default_length", 1.0)
+                                nodes["TrimLength_Ctl"].inputs[0].default_value = v
+                                nodes["TrimLength_Ctl"].inputs[0].keyframe_insert("default_value", frame=frame)
+                            if "FHTG_SetHairCurveProfile" in nodes:
+                                p = nodes["FHTG_SetHairCurveProfile"]
+                                p.inputs[3].default_value = defaults.get("grooming_default_shape", 0.3)
+                                p.inputs[4].default_value = defaults.get("grooming_default_size", 0.3)
+                                p.inputs[5].default_value = defaults.get("grooming_default_root", 0.3)
+                                p.inputs[3].keyframe_insert("default_value", frame=frame)
+                                p.inputs[4].keyframe_insert("default_value", frame=frame)
+                                p.inputs[5].keyframe_insert("default_value", frame=frame)
+            
+            print(f"✅ Loaded type {type_} successfully")
+        else:
+            print(f"⚠️ No saved data found for type {type_}")
+    
+    print(f"🎉 Successfully loaded {len(selected_types)} types: {', '.join(selected_types)}")
     
     apply_displacement_from_json(context, props.library_path, char, set_keyframes=True, frame=frame)
     if char not in character_origin_frames:
@@ -1525,6 +1601,12 @@ class UNIFIEDLIB_OT_save(Operator):
         
         if not props.character_name.strip():
             self.report({'ERROR'}, "Character name cannot be empty!")
+            return {'CANCELLED'}
+        
+        # Validate that at least one type is selected
+        selected_types = get_selected_types(context)
+        if not selected_types:
+            self.report({'ERROR'}, "Please select at least one type (Hair, Beard, Eyebrows, or Accessories)!")
             return {'CANCELLED'}
         
         save_prefs_library_path(context)
@@ -1594,13 +1676,21 @@ class UNIFIEDLIB_OT_load(Operator):
             self.report({'ERROR'}, "No IDENTIRIG rig selected! Use picker to select one.")
             return {'CANCELLED'}
         
+        # Validate that at least one type is selected
+        selected_types = get_selected_types(context)
+        if not selected_types:
+            self.report({'ERROR'}, "Please select at least one type (Hair, Beard, Eyebrows, or Accessories)!")
+            return {'CANCELLED'}
+        
         char = props.character_name
         frame_now = bpy.context.scene.frame_current
         offset = props.transition_frames
         morphing = props.do_morphing
 
         if morphing and previous_character and previous_character != char:
-            key_and_zero_previous(context, previous_character, props.chosen_type, offset)
+            # Handle morphing for each selected type
+            for type_ in selected_types:
+                key_and_zero_previous(context, previous_character, type_, offset)
 
         if morphing and len(character_origin_frames) > 0:
             for prev_char, frame_origin in character_origin_frames.items():
@@ -1782,7 +1872,16 @@ class UNIFIEDLIB_PT_panel(Panel):
         p = context.scene
         layout.prop(p, "library_path")
         layout.prop(p, "character_name")
-        layout.prop(p, "chosen_type")
+        
+        # Type selection checkboxes
+        type_box = layout.box()
+        type_box.label(text="SELECT TYPES", icon='CHECKMARK')
+        type_row = type_box.row()
+        type_row.prop(p, "type_hair")
+        type_row.prop(p, "type_beard")
+        type_row2 = type_box.row()
+        type_row2.prop(p, "type_eyebrows")
+        type_row2.prop(p, "type_accessories")
         
         # Character Preview Settings
         preview_box = layout.box()
